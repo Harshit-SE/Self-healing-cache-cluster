@@ -55,7 +55,30 @@ TEST(ProtocolTest, ParsesHeartbeatMembershipAndReplicaMessages) {
     EXPECT_EQ(update->operation, Request::Operation::MemberUpdate);
     EXPECT_EQ(update->key, "cache-b");
     EXPECT_EQ(update->value, "FAILED");
+    auto joining = parseRequest("v1 MEMBER cache-c JOINING", error);
+    ASSERT_TRUE(joining) << error;
+    EXPECT_EQ(joining->value, "JOINING");
     EXPECT_FALSE(parseRequest("v1 MEMBER cache-b UNKNOWN", error));
+}
+
+TEST(ProtocolTest, ParsesOnlineMembershipChanges) {
+    std::string error;
+    const auto join = parseRequest("v1 JOIN cache-d 127.0.0.1 7404", error);
+    ASSERT_TRUE(join) << error;
+    EXPECT_EQ(join->operation, Request::Operation::NodeJoin);
+    EXPECT_EQ(join->key, "cache-d");
+    EXPECT_EQ(join->value, "127.0.0.1");
+    EXPECT_EQ(join->ttl_ms, 7404);
+    const auto gossip_join = parseRequest("v1 JOIN_PEER cache-d 127.0.0.1 7404", error);
+    ASSERT_TRUE(gossip_join) << error;
+    EXPECT_TRUE(gossip_join->internal_control);
+
+    const auto remove = parseRequest("v1 REMOVE cache-d", error);
+    ASSERT_TRUE(remove) << error;
+    EXPECT_EQ(remove->operation, Request::Operation::NodeRemove);
+    EXPECT_EQ(remove->key, "cache-d");
+    EXPECT_FALSE(parseRequest("v1 JOIN cache-d 127.0.0.1 0", error));
+    EXPECT_FALSE(parseRequest("v1 REMOVE", error));
 }
 TEST(ProtocolTest, ServerHandlesRealTcpRoundTrip) {
     TcpServer server(0);

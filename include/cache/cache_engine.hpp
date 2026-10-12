@@ -4,7 +4,9 @@
 #include <optional>
 #include <shared_mutex>
 #include <string>
+#include <utility>
 #include <unordered_map>
+#include <vector>
 
 namespace cache {
 
@@ -26,6 +28,11 @@ namespace cache {
 // system would typically add a periodic active-expiration sweep.
 class CacheEngine {
 public:
+    struct SnapshotEntry {
+        std::string key;
+        std::string value;
+        std::optional<std::chrono::milliseconds> ttl;
+    };
     CacheEngine() = default;
 
     CacheEngine(const CacheEngine&) = delete;
@@ -51,6 +58,9 @@ public:
     // expiration, this MAY include expired-but-not-yet-accessed entries —
     // it is a storage count, not a "logically valid keys" count.
     std::size_t size() const;
+
+    // Copies live entries with their remaining TTL for background migration.
+    std::vector<SnapshotEntry> snapshot();
 
 private:
     struct CacheEntry {

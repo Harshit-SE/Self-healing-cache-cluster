@@ -64,4 +64,27 @@ std::size_t CacheEngine::size() const {
     return store_.size();
 }
 
+std::vector<CacheEngine::SnapshotEntry> CacheEngine::snapshot() {
+    std::vector<SnapshotEntry> entries;
+    const auto now = std::chrono::steady_clock::now();
+    std::unique_lock lock(mutex_);
+    for (auto it = store_.begin(); it != store_.end();) {
+        if (isExpired(it->second, now)) {
+            it = store_.erase(it);
+            continue;
+        }
+        std::optional<std::chrono::milliseconds> remaining;
+        if (it->second.expires_at) {
+            remaining = std::chrono::duration_cast<std::chrono::milliseconds>(*it->second.expires_at - now);
+            if (*remaining <= std::chrono::milliseconds::zero()) {
+                it = store_.erase(it);
+                continue;
+            }
+        }
+        entries.push_back({it->first, it->second.value, remaining});
+        ++it;
+    }
+    return entries;
+}
+
 }  // namespace cache

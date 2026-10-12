@@ -26,8 +26,8 @@ thresholds. Start each node in a separate terminal:
 ./build/cache_server --config config/cluster.conf --id cache-c
 ```
 
-The client reads the same membership and routes each operation directly to the
-node that owns its key:
+The client reads the membership config, probes the ring owners in order, and
+routes each operation to the first live owner available:
 
 ```sh
 ./build/cache_client --config config/cluster.conf 'v1 SET greeting - hello world'
@@ -37,9 +37,20 @@ node that owns its key:
 
 Each process owns a separate in-memory cache. The client makes the same key
 route to the same node when membership and virtual-node count are unchanged.
-To add or remove a node, update the config and restart node processes with that
-membership. The hash ring gives predictable new ownership. Data is not migrated
-when ownership changes; rebalancing and recovery are later-phase work.
+Servers can update membership online. To add a node, create an expanded config
+for the joining process and clients, then start that process; it announces its
+identity to existing members, which update their rings and repair data to the
+new owners. Existing cache processes do not restart. The joining node remains
+in `JOINING` and is excluded from client routing until every reachable member
+has completed a handoff pass. Old owners continue serving and send concurrent
+replica updates to the joining node during that interval.
+
+To remove a node, send `v1 REMOVE <node-id>` to any live member. The removal is
+propagated, ownership is recalculated, and live nodes queue a repair pass. Keep
+the removed process running until all remaining members report
+`RECOVERY_PENDING=0` and `RECOVERY_FAILURES=0` in `v1 STATUS`; this gives the
+handoff time to finish before its only copy is stopped. The client uses the
+updated config for requests after a node is removed.
 
 ## Replication and failure detection
 
@@ -53,8 +64,7 @@ updates still queued at graceful shutdown are dropped and counted as failures.
 
 Replication is asynchronous: `OK STORED` confirms the primary's in-memory write,
 not replica acknowledgement. A primary failure before a queued update reaches
-a replica can lose that write. Reads through the normal cluster client continue
-to target the primary; a direct host/port client can inspect a replica:
+a replica can lose that write. A direct host/port client can inspect a replica:
 
 ```sh
 ./build/cache_client 127.0.0.1 7402 'v1 GET greeting'
@@ -62,16 +72,35 @@ to target the primary; a direct host/port client can inspect a replica:
 
 Each node probes its configured peers over TCP. `heartbeat_ms` sets the probe
 interval; after `suspect_after` missed probes a peer becomes `SUSPECTED`, and
-after `fail_after` it becomes `FAILED`. State changes are logged and shared
-with other reachable members. A successful probe marks a returning peer
-`ALIVE`. Use `v1 STATUS` against a node to inspect its current view:
+after `fail_after` it becomes `FAILED`. A joining or returning peer remains
+`JOINING` until synchronization completes; other successful peers become
+`ALIVE`. State changes are logged and shared with other reachable members. Use
+`v1 STATUS` against a node to inspect its current view:
 
 ```sh
 ./build/cache_client 127.0.0.1 7401 'v1 STATUS'
 ```
 
-Phase 3 detects and reports failures but does not promote replicas or reroute
-cluster-client requests after primary failure; those are Phase 4.
+The cluster client probes ring owners in order and routes to the first reachable
+owner. If a primary is down, it can reach a surviving replica. A replica accepts
+writes only after its local membership view excludes the failed/suspected
+primary. The failure detector excludes SUSPECTED peers from new ownership, so
+temporary delays can cause early promotion and split-brain writes.
+
+After a health-state transition, live nodes run a background repair pass: each
+stored key is sent to its currently selected owners, with its remaining TTL.
+This repairs an available replica after failover and synchronizes a restarted
+node. This is best-effort anti-entropy, not conflict resolution: the protocol
+has no per-key versions, write quorum, or delete tombstones. Concurrent writes
+during a partition can overwrite newer data, and a missed delete can resurrect
+a stale value. Do not treat failover as zero-data-loss or strongly consistent.
+`v1 STATUS` reports `RECOVERY_PENDING` and `RECOVERY_FAILURES` so operators can
+observe queued/in-flight repairs and exhausted repair deliveries.
+New nodes join online and trigger ring recalculation and best-effort data repair.
+Removal also recalculates ownership and repairs the surviving owners. Clients
+must use the current membership config to calculate candidate owners. Repair
+copies data asynchronously and retains old extra copies; it does not reclaim
+stale entries from former owners.
 
 For a single-node Phase 1 run, the original commands remain available:
 
@@ -96,9 +125,11 @@ node <node-id> <host> <port>
 `vnodes` is optional and defaults to 128; valid values are 1 through 100000.
 `replicas` defaults to 2; valid values are 1 through 1000. Heartbeat defaults
 are 500 ms, 2 missed probes to suspect, and 4 to fail. Node IDs must be unique
-and ports must be from 1 through 65535. Every cluster server and routing client
-should use the same file. Membership is static; health states are runtime views
-and do not change configured ring membership.
+and ports must be from 1 through 65535. Existing server membership can change
+online through JOIN announcements and REMOVE messages. A joining node and
+clients need a config containing the expanded member set; servers learn the
+new node through the joining node's bootstrap announcement. Health states are
+runtime views and do not change membership.
 
 ## Wire protocol v1
 
@@ -112,6 +143,8 @@ contain newlines or NUL bytes. Requests are limited to 64 KiB by default.
 | `v1 GET <key>` | `OK VALUE <value>` or `OK NOT_FOUND` |
 | `v1 SET <key> <ttl-ms-or-> <value>` | `OK STORED` |
 | `v1 DELETE <key>` | `OK DELETED` or `OK MISSING` |
+| `v1 JOIN <node-id> <host> <port>` | `OK MEMBER JOINED` |
+| `v1 REMOVE <node-id>` | `OK MEMBER REMOVED` |
 | malformed request | `ERR <reason>` |
 
 `-` means no expiry; TTL is a non-negative integer in milliseconds. Expiration
@@ -127,5 +160,5 @@ Virtual nodes spread keys across the ring. Data is volatile and is lost when
 all copies are lost. Membership and replica-control messages share the client
 TCP listener and have no authentication or encryption. Servers bind all
 interfaces, so use a trusted network. Failure detection can produce false
-positives during delays or network partitions; it is advisory and does not
-change routing or ownership in this phase.
+positives during delays or network partitions. Durable storage, authentication,
+and versioned conflict resolution are not implemented.

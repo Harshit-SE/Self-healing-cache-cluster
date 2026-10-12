@@ -7,10 +7,12 @@
 namespace cache {
 
 struct Request {
-    enum class Operation { Get, Set, Delete, Ping, Status, ReplicaSet, ReplicaDelete, MemberUpdate } operation;
+    enum class Operation { Get, Set, Delete, Ping, Status, ReplicaSet, ReplicaDelete,
+                           MemberUpdate, NodeJoin, NodeRemove, SyncDone } operation;
     std::string key;
     std::string value;
     std::optional<long long> ttl_ms;
+    bool internal_control{false};
 };
 
 // Version 1 is one UTF-8/ASCII line per message, terminated by LF. Fields
@@ -18,8 +20,9 @@ struct Request {
 // contain spaces. Keys and values cannot contain LF or NUL. TTL is decimal
 // milliseconds; '-' means no expiry. Responses are OK VALUE <value>, OK
 // STORED, OK DELETED|MISSING, or ERR <message>. Empty values are supported.
-// Control-plane records include PING, STATUS, MEMBER, REPLICA_SET, and
-// REPLICA_DELETE; they share this listener in Phase 3 and are not authenticated.
+// Control-plane records include PING, STATUS, MEMBER, JOIN, REMOVE,
+// REPLICA_SET, and REPLICA_DELETE; all share the client listener and are not
+// authenticated.
 std::optional<Request> parseRequest(std::string_view line, std::string& error);
 
 }  // namespace cache

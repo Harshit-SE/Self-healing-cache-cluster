@@ -61,11 +61,40 @@ std::optional<Request> parseRequest(std::string_view line, std::string& error) {
         const auto target = takeToken(line);
         const auto state = takeToken(line);
         if (target.empty() || state.empty() || !line.empty() ||
-            (state != "ALIVE" && state != "SUSPECTED" && state != "FAILED")) {
-            error = "expected MEMBER <node-id> <ALIVE|SUSPECTED|FAILED>";
+            (state != "ALIVE" && state != "JOINING" && state != "SUSPECTED" && state != "FAILED")) {
+            error = "expected MEMBER <node-id> <ALIVE|JOINING|SUSPECTED|FAILED>";
             return std::nullopt;
         }
         return Request{Request::Operation::MemberUpdate, std::string(target), std::string(state), std::nullopt};
+    }
+    if (operation == "JOIN" || operation == "JOIN_PEER") {
+        const auto id = takeToken(line);
+        const auto host = takeToken(line);
+        const auto port_text = takeToken(line);
+        unsigned int port = 0;
+        const auto [end, parse_error] = std::from_chars(port_text.data(), port_text.data() + port_text.size(), port);
+        if (id.empty() || host.empty() || port_text.empty() || !line.empty() ||
+            parse_error != std::errc{} || end != port_text.data() + port_text.size() || port == 0 || port > 65535) {
+            error = "expected JOIN <node-id> <host> <port>";
+            return std::nullopt;
+        }
+        return Request{Request::Operation::NodeJoin, std::string(id), std::string(host),
+                       static_cast<long long>(port), operation == "JOIN_PEER"};
+    }
+    if (operation == "REMOVE" || operation == "REMOVE_PEER") {
+        if (line.empty() || line.find(' ') != std::string_view::npos) {
+            error = "expected REMOVE <node-id>";
+            return std::nullopt;
+        }
+        return Request{Request::Operation::NodeRemove, std::string(line), {}, std::nullopt,
+                       operation == "REMOVE_PEER"};
+    }
+    if (operation == "SYNC_DONE") {
+        if (line.empty() || line.find(' ') != std::string_view::npos) {
+            error = "expected SYNC_DONE <node-id>";
+            return std::nullopt;
+        }
+        return Request{Request::Operation::SyncDone, std::string(line), {}, std::nullopt};
     }
     error = "unknown operation";
     return std::nullopt;

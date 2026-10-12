@@ -64,6 +64,31 @@ TEST(CacheEngineTest, SizeReflectsInsertsAndRemoves) {
     EXPECT_EQ(cache.size(), 1u);
 }
 
+TEST(CacheEngineTest, SnapshotReturnsLiveEntriesWithRemainingTtl) {
+    CacheEngine cache;
+    cache.set("persistent", "value");
+    cache.set("expiring", "short-lived", 2s);
+    cache.set("expired", "gone", 0ms);
+
+    const auto entries = cache.snapshot();
+    ASSERT_EQ(entries.size(), 2u);
+    bool saw_persistent = false;
+    bool saw_expiring = false;
+    for (const auto& entry : entries) {
+        if (entry.key == "persistent") {
+            saw_persistent = true;
+            EXPECT_FALSE(entry.ttl.has_value());
+        } else if (entry.key == "expiring") {
+            saw_expiring = true;
+            ASSERT_TRUE(entry.ttl.has_value());
+            EXPECT_GT(entry.ttl->count(), 0);
+            EXPECT_LE(entry.ttl->count(), 2000);
+        }
+    }
+    EXPECT_TRUE(saw_persistent);
+    EXPECT_TRUE(saw_expiring);
+}
+
 // ---- New: TTL behavior ----
 
 TEST(CacheEngineTest, KeyWithNoTtlNeverExpires) {

@@ -8,6 +8,7 @@
 #include <map>
 #include <mutex>
 #include <optional>
+#include <set>
 #include <string>
 #include <thread>
 #include <vector>
@@ -40,9 +41,18 @@ private:
     void serveClient(int fd);
     void heartbeatLoop();
     void replicationLoop();
+    void recoveryLoop();
     void applyMembershipState(const std::string& node_id, const std::string& state,
                               bool propagate);
+    bool applyNodeJoin(const CacheNode& node, bool propagate);
+    bool applyNodeRemove(const std::string& node_id, bool propagate);
+    void maybeCompleteJoin();
     std::string membershipStatus() const;
+    std::vector<CacheNode> activeOwners(const std::string& key) const;
+    std::vector<CacheNode> replicationOwners(const std::string& key) const;
+    std::vector<CacheNode> configuredNodes() const;
+    ClusterConfig clusterConfigSnapshot() const;
+    bool isClustered() const;
     void enqueueReplicas(const Request& request);
 
     struct ReplicationTask {
@@ -52,6 +62,7 @@ private:
         std::string value;
         std::optional<std::chrono::milliseconds> ttl;
         std::chrono::steady_clock::time_point queued_at;
+        bool recovery{false};
     };
 
     std::uint16_t requested_port_;
@@ -59,6 +70,7 @@ private:
     std::size_t cluster_size_;
     std::optional<ClusterConfig> cluster_config_;
     std::optional<ConsistentHashRing> ring_;
+    mutable std::mutex topology_mutex_;
     std::atomic<std::uint16_t> bound_port_{0};
     std::size_t max_line_bytes_;
     std::atomic<bool> stopping_{false};
@@ -72,9 +84,12 @@ private:
     std::mutex mutation_mutex_;
     std::thread heartbeat_thread_;
     std::thread replication_thread_;
+    std::thread recovery_thread_;
     mutable std::mutex membership_mutex_;
     std::map<std::string, std::string> member_states_;
     std::map<std::string, std::size_t> missed_heartbeats_;
+    std::map<std::string, bool> join_announced_;
+    std::set<std::string> sync_completed_;
     mutable std::mutex heartbeat_wait_mutex_;
     std::condition_variable heartbeat_wait_cv_;
     std::mutex replication_mutex_;
@@ -82,6 +97,12 @@ private:
     std::deque<ReplicationTask> replication_queue_;
     bool replication_stopping_{false};
     std::atomic<std::uint64_t> replication_failures_{0};
+    std::atomic<std::uint64_t> recovery_generation_{1};
+    std::atomic<std::uint64_t> recovery_completed_{0};
+    std::atomic<std::uint64_t> recovery_tasks_pending_{0};
+    std::atomic<std::uint64_t> recovery_failures_{0};
+    std::atomic<std::uint64_t> replication_tasks_pending_{0};
+    std::atomic<bool> recovery_retry_needed_{false};
 };
 
 }  // namespace cache
