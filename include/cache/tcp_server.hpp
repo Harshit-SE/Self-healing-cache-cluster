@@ -14,6 +14,8 @@ namespace cache {
 class TcpServer {
 public:
     explicit TcpServer(std::uint16_t port, std::size_t max_line_bytes = 64 * 1024);
+    TcpServer(std::uint16_t port, std::string node_id, std::size_t cluster_size,
+              std::size_t max_line_bytes = 64 * 1024);
     ~TcpServer();
     TcpServer(const TcpServer&) = delete;
     TcpServer& operator=(const TcpServer&) = delete;
@@ -27,6 +29,8 @@ public:
 private:
     void serveClient(int fd);
     std::uint16_t requested_port_;
+    std::string node_id_;
+    std::size_t cluster_size_;
     std::atomic<std::uint16_t> bound_port_{0};
     std::size_t max_line_bytes_;
     std::atomic<bool> stopping_{false};

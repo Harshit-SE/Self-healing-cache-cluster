@@ -1,8 +1,8 @@
 # Self-Healing Cache Cluster
 
-An educational C++20 cache project. The current milestone is **Phase 1: a
-thread-safe single-node cache over TCP**. It is not a Redis replacement and
-does not yet implement clustering, replication, or failover.
+An educational C++20 cache project. **Phase 2** adds independent cache-node
+processes and client-side routing with a consistent-hashing ring. This project
+is not a Redis replacement.
 
 ## Build and test
 
@@ -14,28 +14,60 @@ ctest --test-dir build --output-on-failure
 
 CMake fetches GoogleTest if it is not already available in the build cache.
 
-## Run
+## Run a cluster
 
-Start the server (port `0` asks Linux to select an available port):
+The sample [cluster config](config/cluster.conf) defines three nodes and 128
+virtual nodes per cache node. Start each node in a separate terminal:
+
+```sh
+./build/cache_server --config config/cluster.conf --id cache-a
+./build/cache_server --config config/cluster.conf --id cache-b
+./build/cache_server --config config/cluster.conf --id cache-c
+```
+
+The client reads the same membership and routes each operation directly to the
+node that owns its key:
+
+```sh
+./build/cache_client --config config/cluster.conf 'v1 SET greeting - hello world'
+./build/cache_client --config config/cluster.conf 'v1 GET greeting'
+./build/cache_client --config config/cluster.conf 'v1 DELETE greeting'
+```
+
+Each process owns a separate in-memory cache. The client makes the same key
+route to the same node when membership and virtual-node count are unchanged.
+To add or remove a node, update the config and restart node processes with that
+membership. The hash ring then gives predictable new ownership. Phase 2 does
+not migrate existing data: a key whose owner changes may be missing until later
+replication and rebalancing phases are implemented.
+
+For a single-node Phase 1 run, the original commands remain available:
 
 ```sh
 ./build/cache_server 7379
+./build/cache_client 127.0.0.1 7379 'v1 SET greeting - hello'
 ```
 
-In another terminal, send one request per client invocation:
+## Membership format
 
-```sh
-./build/cache_client 127.0.0.1 7379 'v1 SET greeting - hello world'
-./build/cache_client 127.0.0.1 7379 'v1 GET greeting'
-./build/cache_client 127.0.0.1 7379 'v1 DELETE greeting'
+The file is whitespace-delimited. Blank lines and `#` comments are ignored.
+
+```text
+vnodes 128
+node <node-id> <host> <port>
 ```
+
+`vnodes` is optional and defaults to 128; valid values are 1 through 100000.
+Node IDs must be unique and ports must be from 1 through 65535. Every cluster
+server and routing client should use the same file. Membership is static for
+this phase; there is no gossip or automatic health detection.
 
 ## Wire protocol v1
 
-TCP carries newline-terminated UTF-8/ASCII records. One connection may send
+TCP carries newline-terminated UTF-8/ASCII records. A connection may send
 multiple requests. Fields are separated by spaces; SET's value is the
-remaining text, so it may contain spaces. Keys and values cannot contain
-newlines or NUL bytes. Requests and responses are limited to 64 KiB by default.
+remaining text, so it may contain spaces or be empty. Keys and values cannot
+contain newlines or NUL bytes. Requests are limited to 64 KiB by default.
 
 | Request | Response |
 |---|---|
@@ -47,14 +79,13 @@ newlines or NUL bytes. Requests and responses are limited to 64 KiB by default.
 `-` means no expiry; TTL is a non-negative integer in milliseconds. Expiration
 is lazy: an expired entry is removed when accessed, not by a background sweep.
 The server handles clients concurrently with one worker thread per connection,
-and each connection has five-second socket I/O timeouts. This is intentionally
-simple for Phase 1; a bounded worker pool is a future scalability improvement.
+and each connection has five-second socket I/O timeouts.
 
 ## Current guarantees and limits
 
-Operations on the in-process map are protected by a shared mutex. Cache data is
-volatile and is lost on process exit. The server binds all interfaces, so use a
-trusted network while the protocol has no authentication or encryption. Later
-phases will add cluster membership, consistent hashing, replicas, and
-self-healing behavior; none of those features should be inferred from this
-single-node milestone.
+The ring uses a specified 64-bit FNV-1a hash rather than `std::hash`, so node
+ownership is stable across process runs and standard-library implementations.
+Virtual nodes spread keys across the ring. Nodes serve only their locally owned
+requests; Phase 2 has no replication, failover, or cross-node migration. Cache
+data is volatile and is lost on process exit. Servers bind all interfaces, so
+use a trusted network while the protocol has no authentication or encryption.

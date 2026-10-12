@@ -22,6 +22,8 @@ add_library(cache_core STATIC
     src/cache_engine.cpp
     src/protocol.cpp
     src/tcp_server.cpp
+    src/cluster_config.cpp
+    src/consistent_hash_ring.cpp
 )
 
 target_include_directories(cache_core PUBLIC include)

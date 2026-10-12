@@ -32,7 +32,12 @@ bool sendAll(int fd, const std::string& data) {
 }
 
 TcpServer::TcpServer(std::uint16_t port, std::size_t max_line_bytes)
-    : requested_port_(port), max_line_bytes_(max_line_bytes) {}
+    : TcpServer(port, "standalone", 1, max_line_bytes) {}
+
+TcpServer::TcpServer(std::uint16_t port, std::string node_id, std::size_t cluster_size,
+                     std::size_t max_line_bytes)
+    : requested_port_(port), node_id_(std::move(node_id)), cluster_size_(cluster_size),
+      max_line_bytes_(max_line_bytes) {}
 
 TcpServer::~TcpServer() { stop(); }
 
@@ -53,7 +58,8 @@ bool TcpServer::start() {
     socklen_t length = sizeof(address);
     if (::getsockname(fd, reinterpret_cast<sockaddr*>(&address), &length) == 0) bound_port_ = ntohs(address.sin_port);
     listen_fd_.store(fd);
-    LOG_INFO("cache server listening on port " << bound_port_);
+    LOG_INFO("cache node " << node_id_ << " (membership size " << cluster_size_
+             << ") listening on port " << bound_port_);
     while (!stopping_.load()) {
         pollfd ready{fd, POLLIN, 0};
         const int polled = ::poll(&ready, 1, 200);
