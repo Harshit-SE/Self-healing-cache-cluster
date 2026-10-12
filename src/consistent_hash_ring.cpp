@@ -1,5 +1,6 @@
 #include "cache/consistent_hash_ring.hpp"
 
+#include <algorithm>
 #include <stdexcept>
 
 namespace cache {
@@ -49,6 +50,29 @@ const CacheNode& ConsistentHashRing::owner(const std::string& key) const {
     auto point = points_.lower_bound({key_hash, std::string{}});
     if (point == points_.end()) point = points_.begin();
     return nodes_.at(point->second);
+}
+
+std::vector<CacheNode> ConsistentHashRing::owners(const std::string& key, std::size_t copies) const {
+    std::vector<CacheNode> result;
+    if (nodes_.empty() || copies == 0) return result;
+    const auto desired = std::min(copies, nodes_.size());
+    auto point = points_.lower_bound({stableHash(key), std::string{}});
+    if (point == points_.end()) point = points_.begin();
+    const auto start = point;
+    do {
+        const auto& id = point->second;
+        if (result.empty() || result.back().id != id) {
+            // A node may have multiple consecutive virtual points, and the
+            // same owner can also recur after another node, so check all seen IDs.
+            const bool already_added = std::any_of(result.begin(), result.end(),
+                [&](const CacheNode& node) { return node.id == id; });
+            if (!already_added) result.push_back(nodes_.at(id));
+        }
+        if (result.size() == desired) break;
+        ++point;
+        if (point == points_.end()) point = points_.begin();
+    } while (point != start);
+    return result;
 }
 
 std::vector<std::string> ConsistentHashRing::nodeIds() const {

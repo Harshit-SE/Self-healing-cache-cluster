@@ -39,6 +39,24 @@ TEST(ProtocolTest, RejectsMalformedOrUnsupportedRequests) {
     EXPECT_FALSE(parseRequest("v1 SET k -1 value", error));
     EXPECT_FALSE(parseRequest("v1 GET", error));
 }
+TEST(ProtocolTest, ParsesHeartbeatMembershipAndReplicaMessages) {
+    std::string error;
+    auto ping = parseRequest("v1 PING", error);
+    ASSERT_TRUE(ping); EXPECT_EQ(ping->operation, Request::Operation::Ping);
+    auto status = parseRequest("v1 STATUS", error);
+    ASSERT_TRUE(status); EXPECT_EQ(status->operation, Request::Operation::Status);
+    auto replica = parseRequest("v1 REPLICA_SET key 100 value with spaces", error);
+    ASSERT_TRUE(replica) << error;
+    EXPECT_EQ(replica->operation, Request::Operation::ReplicaSet);
+    EXPECT_EQ(replica->ttl_ms, 100);
+    EXPECT_EQ(replica->value, "value with spaces");
+    auto update = parseRequest("v1 MEMBER cache-b FAILED", error);
+    ASSERT_TRUE(update) << error;
+    EXPECT_EQ(update->operation, Request::Operation::MemberUpdate);
+    EXPECT_EQ(update->key, "cache-b");
+    EXPECT_EQ(update->value, "FAILED");
+    EXPECT_FALSE(parseRequest("v1 MEMBER cache-b UNKNOWN", error));
+}
 TEST(ProtocolTest, ServerHandlesRealTcpRoundTrip) {
     TcpServer server(0);
     std::thread server_thread([&] { EXPECT_TRUE(server.start()); });

@@ -23,14 +23,20 @@ std::optional<Request> parseRequest(std::string_view line, std::string& error) {
     const auto version = takeToken(line);
     const auto operation = takeToken(line);
     if (version != "v1") { error = "unsupported protocol version"; return std::nullopt; }
-    if (operation == "GET" || operation == "DELETE") {
+    if (operation == "PING" || operation == "STATUS") {
+        if (!line.empty()) { error = "unexpected arguments"; return std::nullopt; }
+        return Request{operation == "PING" ? Request::Operation::Ping : Request::Operation::Status,
+                       {}, {}, std::nullopt};
+    }
+    if (operation == "GET" || operation == "DELETE" || operation == "REPLICA_DELETE") {
         if (line.empty() || line.find(' ') != std::string_view::npos) {
             error = "expected exactly one key"; return std::nullopt;
         }
         if (operation == "GET") return Request{Request::Operation::Get, std::string(line), {}, std::nullopt};
-        return Request{Request::Operation::Delete, std::string(line), {}, std::nullopt};
+        return Request{operation == "DELETE" ? Request::Operation::Delete : Request::Operation::ReplicaDelete,
+                       std::string(line), {}, std::nullopt};
     }
-    if (operation == "SET") {
+    if (operation == "SET" || operation == "REPLICA_SET") {
         const auto key = takeToken(line);
         const auto separator = line.find(' ');
         if (key.empty() || separator == std::string_view::npos) {
@@ -48,7 +54,18 @@ std::optional<Request> parseRequest(std::string_view line, std::string& error) {
             }
             ttl_ms = parsed;
         }
-        return Request{Request::Operation::Set, std::string(key), std::string(value), ttl_ms};
+        return Request{operation == "SET" ? Request::Operation::Set : Request::Operation::ReplicaSet,
+                       std::string(key), std::string(value), ttl_ms};
+    }
+    if (operation == "MEMBER") {
+        const auto target = takeToken(line);
+        const auto state = takeToken(line);
+        if (target.empty() || state.empty() || !line.empty() ||
+            (state != "ALIVE" && state != "SUSPECTED" && state != "FAILED")) {
+            error = "expected MEMBER <node-id> <ALIVE|SUSPECTED|FAILED>";
+            return std::nullopt;
+        }
+        return Request{Request::Operation::MemberUpdate, std::string(target), std::string(state), std::nullopt};
     }
     error = "unknown operation";
     return std::nullopt;

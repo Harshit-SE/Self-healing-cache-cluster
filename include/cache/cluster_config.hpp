@@ -15,6 +15,10 @@ struct CacheNode {
 
 struct ClusterConfig {
     std::size_t virtual_nodes{128};
+    std::size_t replication_factor{2};
+    std::size_t heartbeat_interval_ms{500};
+    std::size_t suspect_after_missed_heartbeats{2};
+    std::size_t fail_after_missed_heartbeats{4};
     std::vector<CacheNode> nodes;
 
     static ClusterConfig load(const std::string& path);

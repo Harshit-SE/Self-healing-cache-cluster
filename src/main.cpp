@@ -28,8 +28,8 @@ int main(int argc, char** argv) {
     if (argc == 5 && std::string(argv[1]) == "--config" && std::string(argv[3]) == "--id") {
         try {
             const auto config = cache::ClusterConfig::load(argv[2]);
-            const auto& node = config.nodeById(argv[4]);
-            cache::TcpServer server(node.port, node.id, config.nodes.size());
+            (void)config.nodeById(argv[4]);
+            cache::TcpServer server(config, argv[4]);
             return server.start() ? 0 : 1;
         } catch (const std::exception& error) {
             LOG_ERROR(error.what());

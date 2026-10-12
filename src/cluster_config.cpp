@@ -4,6 +4,7 @@
 #include <fstream>
 #include <sstream>
 #include <stdexcept>
+#include <set>
 #include <unordered_set>
 
 namespace cache {
@@ -13,7 +14,7 @@ ClusterConfig ClusterConfig::load(const std::string& path) {
     if (!input) throw std::runtime_error("cannot open cluster config: " + path);
 
     ClusterConfig config;
-    bool saw_vnodes = false;
+    std::set<std::string> seen_settings;
     std::unordered_set<std::string> ids;
     std::string line;
     std::size_t line_number = 0;
@@ -23,16 +24,26 @@ ClusterConfig ClusterConfig::load(const std::string& path) {
         std::istringstream row(line);
         std::string kind;
         if (!(row >> kind)) continue;
-        if (kind == "vnodes") {
+        if (kind == "vnodes" || kind == "replicas" || kind == "heartbeat_ms" ||
+            kind == "suspect_after" || kind == "fail_after") {
             std::string value, extra;
-            if (saw_vnodes || !(row >> value) || (row >> extra))
-                throw std::runtime_error("invalid vnodes setting on line " + std::to_string(line_number));
+            if (!seen_settings.insert(kind).second || !(row >> value) || (row >> extra))
+                throw std::runtime_error("invalid or duplicate " + kind + " setting on line " + std::to_string(line_number));
             std::size_t parsed = 0;
             const auto [end, error] = std::from_chars(value.data(), value.data() + value.size(), parsed);
-            if (error != std::errc{} || end != value.data() + value.size() || parsed == 0 || parsed > 100000)
-                throw std::runtime_error("vnodes must be an integer from 1 to 100000 on line " + std::to_string(line_number));
-            config.virtual_nodes = parsed;
-            saw_vnodes = true;
+            std::size_t minimum = 1, maximum = 100000;
+            if (kind == "replicas") maximum = 1000;
+            else if (kind == "heartbeat_ms") { minimum = 50; maximum = 60000; }
+            else if (kind == "suspect_after") maximum = 100;
+            else if (kind == "fail_after") { minimum = 2; maximum = 100; }
+            if (error != std::errc{} || end != value.data() + value.size() || parsed < minimum || parsed > maximum)
+                throw std::runtime_error(kind + " must be an integer from " + std::to_string(minimum) +
+                                         " to " + std::to_string(maximum) + " on line " + std::to_string(line_number));
+            if (kind == "vnodes") config.virtual_nodes = parsed;
+            else if (kind == "replicas") config.replication_factor = parsed;
+            else if (kind == "heartbeat_ms") config.heartbeat_interval_ms = parsed;
+            else if (kind == "suspect_after") config.suspect_after_missed_heartbeats = parsed;
+            else config.fail_after_missed_heartbeats = parsed;
         } else if (kind == "node") {
             CacheNode node;
             unsigned int port = 0;
@@ -51,6 +62,8 @@ ClusterConfig ClusterConfig::load(const std::string& path) {
         }
     }
     if (config.nodes.empty()) throw std::runtime_error("cluster config must contain at least one node");
+    if (config.fail_after_missed_heartbeats <= config.suspect_after_missed_heartbeats)
+        throw std::runtime_error("fail_after must be greater than suspect_after");
     return config;
 }
 

@@ -21,6 +21,8 @@ public:
     void addNode(const CacheNode& node);
     bool removeNode(const std::string& id);
     const CacheNode& owner(const std::string& key) const;
+    // Returns distinct nodes in clockwise ring order, beginning with the primary.
+    std::vector<CacheNode> owners(const std::string& key, std::size_t copies) const;
     std::size_t nodeCount() const noexcept { return nodes_.size(); }
     std::size_t virtualNodeCount() const noexcept { return virtual_nodes_; }
     std::vector<std::string> nodeIds() const;
