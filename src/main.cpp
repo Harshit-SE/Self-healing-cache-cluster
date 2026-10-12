@@ -1,10 +1,14 @@
 #include "cache/logger.hpp"
+#include "cache/tcp_server.hpp"
 
-int main() {
-    LOG_INFO("cache_server starting up");
-    LOG_DEBUG("This is a debug line (port binding logic added in Step 8)");
-    LOG_WARN("This is a warning line (example only)");
-    LOG_ERROR("This is an error line (example only)");
-    LOG_INFO("cache_server shutting down");
-    return 0;
+#include <cstdlib>
+
+int main(int argc, char** argv) {
+    if (argc != 2) { LOG_ERROR("usage: cache_server <port>"); return 2; }
+    char* end = nullptr;
+    const auto port = std::strtoul(argv[1], &end, 10);
+    if (!end || *end != '\0' || port > 65535) { LOG_ERROR("port must be an integer from 0 to 65535"); return 2; }
+    cache::TcpServer tcp_server(static_cast<std::uint16_t>(port));
+    const bool ok = tcp_server.start();
+    return ok ? 0 : 1;
 }
