@@ -166,6 +166,26 @@ batch predictions.
 
 ## Run the three-node cluster
 
+For the fastest local demonstration, run the launcher from the repository root:
+
+```sh
+./demo.sh
+```
+
+It starts any missing cache nodes and advisor, starts or reuses the named
+Prometheus and Grafana containers, starts the advisor collector, and generates
+light sample traffic so the dashboard has live data. On first use it may build the C++ binaries, download
+the monitoring container images, and ask for your sudo password for Docker.
+Open the printed Grafana URL to present the dashboard. Use `./demo.sh status`
+to check service endpoints and `./demo.sh stop` to stop the processes and
+containers that the launcher started. Existing services detected before the
+launcher runs are reused and left running by `stop`.
+
+The launcher requires Linux, Docker, curl, a built C++ project (it builds it if
+the binaries are missing), and the advisor virtual environment described in
+[Run the AI advisor](#run-the-ai-advisor). It uses host networking for this
+single-machine demo and binds Grafana and Prometheus to localhost.
+
 The sample [cluster configuration](config/cluster.conf) defines three nodes,
 128 virtual nodes per node, two total copies per key, and heartbeat thresholds.
 Open three terminals at the repository root and start one server in each:

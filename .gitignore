@@ -7,3 +7,4 @@ ai_service/.venv/
 __pycache__/
 
 ai_service/artifacts/*.joblib
+.demo/
