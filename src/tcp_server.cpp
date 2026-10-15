@@ -5,6 +5,7 @@
 #include <arpa/inet.h>
 #include <cerrno>
 #include <cstring>
+#include <fstream>
 #include <fcntl.h>
 #include <netdb.h>
 #include <netinet/in.h>
@@ -89,17 +90,18 @@ bool rpc(const std::string& host, std::uint16_t port, const std::string& command
 
 }  // namespace
 
-TcpServer::TcpServer(std::uint16_t port, std::size_t max_line_bytes)
-    : TcpServer(port, "standalone", 1, max_line_bytes) {}
+TcpServer::TcpServer(std::uint16_t port, std::size_t max_line_bytes,
+                     std::optional<std::uint16_t> metrics_port)
+    : TcpServer(port, "standalone", 1, max_line_bytes, metrics_port) {}
 
 TcpServer::TcpServer(std::uint16_t port, std::string node_id, std::size_t cluster_size,
-                     std::size_t max_line_bytes)
-    : requested_port_(port), node_id_(std::move(node_id)), cluster_size_(cluster_size),
+                     std::size_t max_line_bytes, std::optional<std::uint16_t> metrics_port)
+    : requested_port_(port), requested_metrics_port_(metrics_port), node_id_(std::move(node_id)), cluster_size_(cluster_size),
       max_line_bytes_(max_line_bytes) {}
 
 TcpServer::TcpServer(const ClusterConfig& config, const std::string& node_id,
-                     std::size_t max_line_bytes)
-    : TcpServer(config.nodeById(node_id).port, node_id, config.nodes.size(), max_line_bytes) {
+                     std::size_t max_line_bytes, std::optional<std::uint16_t> metrics_port)
+    : TcpServer(config.nodeById(node_id).port, node_id, config.nodes.size(), max_line_bytes, metrics_port) {
     cluster_config_ = config;
     ring_.emplace(config);
     for (const auto& node : config.nodes) {
@@ -130,6 +132,7 @@ bool TcpServer::start() {
     listen_fd_.store(fd);
     LOG_INFO("cache node " << node_id_ << " (membership size " << cluster_size_
              << ") listening on port " << bound_port_);
+    if (requested_metrics_port_) metrics_thread_ = std::thread(&TcpServer::metricsLoop, this);
     if (cluster_config_) {
         if (cluster_config_->nodes.size() > 1) {
             std::lock_guard lock(membership_mutex_);
@@ -170,6 +173,7 @@ bool TcpServer::start() {
     ::close(fd);
     for (auto& worker : workers_) if (worker.joinable()) worker.join();
     workers_.clear();
+    if (metrics_thread_.joinable()) metrics_thread_.join();
     if (heartbeat_thread_.joinable()) heartbeat_thread_.join();
     if (recovery_thread_.joinable()) recovery_thread_.join();
     if (replication_thread_.joinable()) {
@@ -202,6 +206,96 @@ void TcpServer::stop() {
     { std::lock_guard lock(clients_mutex_); for (int client : clients_) ::shutdown(client, SHUT_RDWR); }
 }
 
+void TcpServer::metricsLoop() {
+    const int fd = ::socket(AF_INET, SOCK_STREAM, 0);
+    if (fd < 0) { LOG_WARN("metrics endpoint socket failed: " << std::strerror(errno)); return; }
+    int yes = 1;
+    ::setsockopt(fd, SOL_SOCKET, SO_REUSEADDR, &yes, sizeof(yes));
+    sockaddr_in address{};
+    address.sin_family = AF_INET;
+    address.sin_addr.s_addr = htonl(INADDR_ANY);
+    address.sin_port = htons(*requested_metrics_port_);
+    if (::bind(fd, reinterpret_cast<sockaddr*>(&address), sizeof(address)) < 0 || ::listen(fd, 32) < 0) {
+        LOG_WARN("metrics endpoint could not bind port " << *requested_metrics_port_ << ": " << std::strerror(errno));
+        ::close(fd);
+        return;
+    }
+    socklen_t address_length = sizeof(address);
+    if (::getsockname(fd, reinterpret_cast<sockaddr*>(&address), &address_length) == 0)
+        bound_metrics_port_.store(ntohs(address.sin_port));
+    LOG_INFO("metrics endpoint for " << node_id_ << " listening on port " << bound_metrics_port_);
+    while (!stopping_.load()) {
+        pollfd ready{fd, POLLIN, 0};
+        const int polled = ::poll(&ready, 1, 200);
+        if (polled < 0) { if (errno == EINTR) continue; break; }
+        if (polled == 0) continue;
+        const int client = ::accept(fd, nullptr, nullptr);
+        if (client < 0) { if (errno == EINTR) continue; break; }
+        timeval timeout{1, 0};
+        ::setsockopt(client, SOL_SOCKET, SO_RCVTIMEO, &timeout, sizeof(timeout));
+        ::setsockopt(client, SOL_SOCKET, SO_SNDTIMEO, &timeout, sizeof(timeout));
+        std::string request;
+        char buffer[1024];
+        while (request.size() < 4096 && request.find("\r\n\r\n") == std::string::npos) {
+            const auto n = ::recv(client, buffer, sizeof(buffer), 0);
+            if (n < 0 && errno == EINTR) continue;
+            if (n <= 0) break;
+            request.append(buffer, static_cast<std::size_t>(n));
+        }
+        const auto line_end = request.find("\r\n");
+        const auto request_line = request.substr(0, line_end);
+        std::string body;
+        std::string content_type;
+        int status_code = 200;
+        if (request_line.rfind("GET /metrics ", 0) == 0) {
+            const auto live_bytes = cache_.approximateMemoryBytes();
+            std::size_t process_rss_bytes = 0;
+            std::ifstream memory_stats("/proc/self/statm");
+            std::size_t virtual_pages = 0, resident_pages = 0;
+            if (memory_stats >> virtual_pages >> resident_pages) {
+                const long page_size = ::sysconf(_SC_PAGESIZE);
+                if (page_size > 0) process_rss_bytes = resident_pages * static_cast<std::size_t>(page_size);
+            }
+            std::uint64_t pending = 0;
+            double lag_seconds = 0.0;
+            {
+                std::lock_guard lock(replication_mutex_);
+                pending = replication_tasks_pending_.load();
+                if (!replication_queue_.empty()) {
+                    lag_seconds = std::chrono::duration<double>(std::chrono::steady_clock::now() -
+                        replication_queue_.front().queued_at).count();
+                }
+            }
+            std::vector<std::pair<std::string, std::string>> states;
+            {
+                std::lock_guard lock(membership_mutex_);
+                states.assign(member_states_.begin(), member_states_.end());
+            }
+            body = metrics_.renderPrometheus(node_id_, cache_.size(), live_bytes, process_rss_bytes, pending,
+                replication_failures_.load(), lag_seconds,
+                recovery_tasks_pending_.load() + (recovery_generation_.load() > recovery_completed_.load()
+                    ? recovery_generation_.load() - recovery_completed_.load() : 0),
+                recovery_failures_.load(), states);
+            content_type = "text/plain; version=0.0.4; charset=utf-8";
+        } else if (request_line.rfind("GET /hotkeys ", 0) == 0) {
+            body = metrics_.renderHotKeys(node_id_, metrics_.nodeRequestRate());
+            content_type = "application/json";
+        } else {
+            status_code = 404;
+            body = "not found\n";
+            content_type = "text/plain; charset=utf-8";
+        }
+        const std::string reason = status_code == 200 ? "OK" : "Not Found";
+        const auto response = "HTTP/1.1 " + std::to_string(status_code) + " " + reason + "\r\n" +
+            "Content-Type: " + content_type + "\r\nContent-Length: " + std::to_string(body.size()) +
+            "\r\nConnection: close\r\n\r\n" + body;
+        sendAll(client, response);
+        ::close(client);
+    }
+    ::close(fd);
+    bound_metrics_port_.store(0);
+}
+
 void TcpServer::serveClient(int fd) {
     timeval timeout{5, 0};
     ::setsockopt(fd, SOL_SOCKET, SO_RCVTIMEO, &timeout, sizeof(timeout));
@@ -224,6 +318,10 @@ void TcpServer::serveClient(int fd) {
             auto request = parseRequest(std::string_view(pending).substr(0, newline), error);
             pending.erase(0, newline + 1);
             std::string response;
+            std::optional<bool> cache_hit;
+            const bool measure = request && (request->operation == Request::Operation::Get ||
+                request->operation == Request::Operation::Set || request->operation == Request::Operation::Delete);
+            const auto request_started = std::chrono::steady_clock::now();
             if (!request) response = "ERR " + error + "\n";
             else if (request->operation == Request::Operation::Ping) {
                 response = "OK PONG " + node_id_ + "\n";
@@ -267,6 +365,7 @@ void TcpServer::serveClient(int fd) {
                 response = "OK REPLICA DELETED\n";
             } else if (request->operation == Request::Operation::Get) {
                 auto value = cache_.get(request->key);
+                cache_hit = value.has_value();
                 response = value ? "OK VALUE " + *value + "\n" : "OK NOT_FOUND\n";
             } else if (request->operation == Request::Operation::Set || request->operation == Request::Operation::Delete) {
                 const auto copies = activeOwners(request->key);
@@ -303,6 +402,12 @@ void TcpServer::serveClient(int fd) {
                         response = removed ? "OK DELETED\n" : "OK MISSING\n";
                     }
                 }
+            }
+            if (measure) {
+                const char* operation = request->operation == Request::Operation::Get ? "get" :
+                    (request->operation == Request::Operation::Set ? "set" : "delete");
+                metrics_.observe(operation, request->key, cache_hit,
+                    std::chrono::steady_clock::now() - request_started);
             }
             if (!sendAll(fd, response)) { connected = false; break; }
         }
@@ -674,6 +779,7 @@ void TcpServer::heartbeatLoop() {
                 auto& misses = missed_heartbeats_[peer.id];
                 if (healthy) {
                     misses = 0;
+                    failure_start_times_.erase(peer.id);
                     const auto state = member_states_.find(peer.id);
                     if (state != member_states_.end() && state->second != "JOINING") {
                         // A peer that was unavailable must rejoin through a
@@ -683,6 +789,7 @@ void TcpServer::heartbeatLoop() {
                         updated_state = state->second == "FAILED" ? "JOINING" : "ALIVE";
                     }
                 } else {
+                    if (misses == 0) failure_start_times_[peer.id] = std::chrono::steady_clock::now();
                     ++misses;
                     if (misses >= config.fail_after_missed_heartbeats) updated_state = "FAILED";
                     else if (misses >= config.suspect_after_missed_heartbeats) updated_state = "SUSPECTED";
@@ -721,14 +828,35 @@ void TcpServer::applyMembershipState(const std::string& node_id, const std::stri
         }
     }
     bool changed = false;
+    std::optional<std::chrono::nanoseconds> failure_duration;
+    std::optional<std::chrono::nanoseconds> detection_duration;
     {
         std::lock_guard lock(membership_mutex_);
         const auto found = member_states_.find(node_id);
         if (found == member_states_.end()) return;
-        if (found->second != state) { found->second = state; changed = true; }
+        if (found->second != state) {
+            found->second = state;
+            changed = true;
+            const auto now = std::chrono::steady_clock::now();
+            if (state == "SUSPECTED") {
+                auto [started, inserted] = failure_start_times_.try_emplace(node_id, now);
+                (void)inserted;
+                detection_duration = std::chrono::duration_cast<std::chrono::nanoseconds>(now - started->second);
+            } else if (state == "FAILED") {
+                const auto started = failure_start_times_.find(node_id);
+                if (started != failure_start_times_.end()) {
+                    failure_duration = std::chrono::duration_cast<std::chrono::nanoseconds>(now - started->second);
+                    failure_start_times_.erase(started);
+                }
+            } else if (state == "ALIVE" || state == "JOINING") {
+                failure_start_times_.erase(node_id);
+            }
+        }
     }
     if (promotion_lock.owns_lock()) promotion_lock.unlock();
     if (!changed) return;
+    if (detection_duration) metrics_.recordFailureDetectionDuration(*detection_duration);
+    if (state == "FAILED") metrics_.recordFailureEvent(failure_duration);
     ++recovery_generation_;
     heartbeat_wait_cv_.notify_all();
     if (state == "ALIVE") LOG_INFO("membership: node " << node_id << " is ALIVE");

@@ -1,0 +1,31 @@
+{
+  "annotations": {"list": []},
+  "editable": true,
+  "fiscalYearStartMonth": 0,
+  "graphTooltip": 0,
+  "id": null,
+  "links": [],
+  "liveNow": false,
+  "panels": [
+    {"datasource":{"type":"prometheus","uid":"cache-prometheus"},"fieldConfig":{"defaults":{"unit":"reqps"},"overrides":[]},"gridPos":{"h":8,"w":12,"x":0,"y":0},"id":1,"targets":[{"expr":"sum by (node, operation) (rate(cache_requests_total[1m]))","legendFormat":"{{node}} {{operation}}","refId":"A"}],"title":"Request rate","type":"timeseries"},
+    {"datasource":{"type":"prometheus","uid":"cache-prometheus"},"fieldConfig":{"defaults":{"unit":"s"},"overrides":[]},"gridPos":{"h":8,"w":12,"x":12,"y":0},"id":2,"targets":[{"expr":"histogram_quantile(0.95, sum by (le, node) (rate(cache_request_duration_seconds_bucket[5m])))","legendFormat":"{{node}} p95","refId":"A"},{"expr":"histogram_quantile(0.99, sum by (le, node) (rate(cache_request_duration_seconds_bucket[5m])))","legendFormat":"{{node}} p99","refId":"B"}],"title":"Request latency","type":"timeseries"},
+    {"datasource":{"type":"prometheus","uid":"cache-prometheus"},"fieldConfig":{"defaults":{"unit":"percent","min":0,"max":100},"overrides":[]},"gridPos":{"h":8,"w":8,"x":0,"y":8},"id":3,"targets":[{"expr":"100 * sum by (node) (rate(cache_hits_total[5m])) / clamp_min(sum by (node) (rate(cache_hits_total[5m]) + rate(cache_misses_total[5m])), 1e-9)","legendFormat":"{{node}} hit ratio","refId":"A"}],"title":"Cache hit ratio","type":"timeseries"},
+    {"datasource":{"type":"prometheus","uid":"cache-prometheus"},"fieldConfig":{"defaults":{"unit":"short"},"overrides":[]},"gridPos":{"h":8,"w":8,"x":8,"y":8},"id":4,"targets":[{"expr":"cache_keys","legendFormat":"{{node}}","refId":"A"}],"title":"Stored keys","type":"timeseries"},
+    {"datasource":{"type":"prometheus","uid":"cache-prometheus"},"fieldConfig":{"defaults":{"unit":"bytes"},"overrides":[]},"gridPos":{"h":8,"w":8,"x":16,"y":8},"id":5,"targets":[{"expr":"cache_memory_bytes","legendFormat":"{{node}} payload","refId":"A"},{"expr":"cache_process_resident_memory_bytes","legendFormat":"{{node}} process RSS","refId":"B"}],"title":"Memory usage","type":"timeseries"},
+    {"datasource":{"type":"prometheus","uid":"cache-prometheus"},"fieldConfig":{"defaults":{"unit":"s"},"overrides":[]},"gridPos":{"h":8,"w":8,"x":0,"y":16},"id":6,"targets":[{"expr":"cache_replication_lag_seconds","legendFormat":"{{node}}","refId":"A"}],"title":"Replication lag","type":"timeseries"},
+    {"datasource":{"type":"prometheus","uid":"cache-prometheus"},"fieldConfig":{"defaults":{"unit":"short"},"overrides":[]},"gridPos":{"h":8,"w":8,"x":8,"y":16},"id":7,"targets":[{"expr":"cache_recovery_pending","legendFormat":"{{node}} pending","refId":"A"},{"expr":"cache_recovery_failures_total","legendFormat":"{{node}} failures","refId":"B"}],"title":"Recovery work","type":"timeseries"},
+    {"datasource":{"type":"prometheus","uid":"cache-prometheus"},"fieldConfig":{"defaults":{"unit":"short"},"overrides":[]},"gridPos":{"h":8,"w":8,"x":16,"y":16},"id":8,"targets":[{"expr":"cache_node_state","legendFormat":"{{member}} {{state}}","refId":"A"}],"title":"Membership state","type":"timeseries"},
+    {"datasource":{"type":"prometheus","uid":"cache-prometheus"},"fieldConfig":{"defaults":{"unit":"s"},"overrides":[]},"gridPos":{"h":8,"w":12,"x":0,"y":24},"id":9,"targets":[{"expr":"histogram_quantile(0.95, sum by (le, node) (rate(cache_failure_detection_duration_seconds_bucket[5m])))","legendFormat":"{{node}} detection p95","refId":"A"},{"expr":"histogram_quantile(0.95, sum by (le, node) (rate(cache_failover_duration_seconds_bucket[5m])))","legendFormat":"{{node}} failover p95","refId":"B"}],"title":"Failure detection and failover timing","type":"timeseries"},
+    {"datasource":{"type":"prometheus","uid":"cache-prometheus"},"fieldConfig":{"defaults":{"unit":"short"},"overrides":[]},"gridPos":{"h":8,"w":12,"x":12,"y":24},"id":10,"targets":[{"expr":"rate(cache_failover_events_total[5m])","legendFormat":"{{node}} failures/sec","refId":"A"}],"title":"Failed-node events","type":"timeseries"}
+  ],
+  "refresh": "5s",
+  "schemaVersion": 39,
+  "tags": ["cache", "distributed-systems"],
+  "templating": {"list": []},
+  "time": {"from": "now-15m", "to": "now"},
+  "timepicker": {},
+  "timezone": "browser",
+  "title": "Self-Healing Cache Cluster",
+  "uid": "cache-cluster",
+  "version": 1
+}

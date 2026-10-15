@@ -24,6 +24,7 @@ add_library(cache_core STATIC
     src/tcp_server.cpp
     src/cluster_config.cpp
     src/consistent_hash_ring.cpp
+    src/metrics.cpp
 )
 
 target_include_directories(cache_core PUBLIC include)

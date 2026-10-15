@@ -3,3 +3,7 @@ build/
 *.a
 compile_commands.json
 .cache/
+ai_service/.venv/
+__pycache__/
+
+ai_service/artifacts/*.joblib

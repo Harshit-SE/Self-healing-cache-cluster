@@ -1,0 +1,12 @@
+global:
+  scrape_interval: 5s
+  evaluation_interval: 5s
+
+scrape_configs:
+  - job_name: self-healing-cache
+    metrics_path: /metrics
+    static_configs:
+      - targets:
+          - 127.0.0.1:17401
+          - 127.0.0.1:17402
+          - 127.0.0.1:17403

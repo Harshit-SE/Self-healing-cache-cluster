@@ -26,6 +26,21 @@ thresholds. Start each node in a separate terminal:
 ./build/cache_server --config config/cluster.conf --id cache-c
 ```
 
+For Phase 5 metrics, pass a unique HTTP scrape port to each node. The sample
+Prometheus configuration expects ports 17401 through 17403:
+
+```sh
+./build/cache_server --config config/cluster.conf --id cache-a --metrics-port 17401
+./build/cache_server --config config/cluster.conf --id cache-b --metrics-port 17402
+./build/cache_server --config config/cluster.conf --id cache-c --metrics-port 17403
+```
+
+The optional endpoint serves Prometheus text at `/metrics` and a bounded recent
+hot-key feed at `/hotkeys`. It is disabled unless a metrics port is provided.
+Port `0` asks the OS for an ephemeral port when embedding the server. Both
+endpoints have no authentication and should only be exposed to a trusted
+monitoring network.
+
 The client reads the membership config, probes the ring owners in order, and
 routes each operation to the first live owner available:
 
@@ -162,3 +177,85 @@ TCP listener and have no authentication or encryption. Servers bind all
 interfaces, so use a trusted network. Failure detection can produce false
 positives during delays or network partitions. Durable storage, authentication,
 and versioned conflict resolution are not implemented.
+
+## Phase 5: monitoring, hot-key advisor, and benchmark
+
+Each node exposes request counters by operation, GET hit and miss counters,
+request latency histogram buckets, physical key count, approximate key/value
+string bytes, current process RSS, replication queue depth and lag, replication and
+recovery failures, failed-node events, and current membership states. Prometheus
+can calculate latency quantiles such as p95 and p99. The per-key feed is
+separate from Prometheus metrics to avoid one time series per key. It retains a
+bounded 60-second window for at most 4096 distinct keys and returns the top 100
+by request volume.
+
+Run Prometheus with [monitoring/prometheus.yml](monitoring/prometheus.yml). The
+Grafana datasource and dashboard are in `monitoring/grafana/`; provision them or
+import `monitoring/grafana/dashboards/cache-cluster.json` manually. The sample
+targets assume Prometheus runs on the same host and the three cache nodes use
+the metrics ports shown above.
+
+The optional FastAPI advisor predicts whether a key will be hot in the next
+observation window. It uses logistic regression with access rate, read/write
+mix, node load, and mean latency. Its API recommends an additional replica only
+for predicted hot keys that are read-heavy. Recommendations are advisory and
+are not automatically applied to the cluster. Cache serving, replication, and
+failover do not call this service, so it can be stopped without affecting cache
+correctness or availability.
+
+Set up and run the advisor from the repository root:
+
+```sh
+python3 -m venv ai_service/.venv
+ai_service/.venv/bin/pip install -r ai_service/requirements.txt
+ai_service/.venv/bin/python ai_service/evaluate.py
+ai_service/.venv/bin/uvicorn ai_service.main:app --app-dir ai_service --host 127.0.0.1 --port 8000
+```
+
+Check `/health` and `/evaluation`, or submit a feature record to `/predict`.
+To collect real node observations and print their predictions:
+
+```sh
+ai_service/.venv/bin/python ai_service/collector.py \
+  --node http://127.0.0.1:17401 --node http://127.0.0.1:17402 \
+  --node http://127.0.0.1:17403 --advisor http://127.0.0.1:8000 --once
+```
+
+The checked-in evaluation procedure creates a seeded synthetic time series,
+trains on the first 80% of ordered windows, and reports held-out accuracy,
+precision, recall, and F1 beside a transparent rule baseline. These results
+validate the pipeline against known simulated workloads only. They do not
+estimate production accuracy; representative labeled traffic is required
+before making that claim.
+
+Re-run advisor tests and evaluation with:
+
+```sh
+ai_service/.venv/bin/python -m unittest discover -s ai_service -p 'test_*.py' -v
+ai_service/.venv/bin/python ai_service/evaluate.py
+```
+
+Run a persistent-connection load test against a node or cluster client endpoint:
+
+```sh
+python3 tools/benchmark.py --host 127.0.0.1 --port 7401 --requests 10000 \
+  --workers 8 --keys 1000 --hot-keys 20 --read-ratio 0.9 --hot-share 0.8
+```
+
+The benchmark reports completed requests, throughput, mean and p50/p95/p99
+latency, failure count, and workload mix as JSON. These are environment-specific
+measurements; record the machine, configuration, and command alongside results.
+
+An initial single-node loopback run on an AMD Ryzen 5 5600H system (12 logical
+CPUs, Linux 7.0.0-28) completed 10,000 requests with 8 workers, 90% reads, and
+80% of accesses directed at 20 hot keys. It measured 5,618.32 requests/second,
+1.4151 ms mean latency, 1.4475 ms p50, 2.0545 ms p95, 2.3324 ms p99, and zero
+failed requests. This is a local development measurement with metrics enabled;
+it is not a multi-node capacity or production benchmark.
+
+The saved synthetic time-split evaluation contains 9,568 training rows and
+2,392 held-out rows. Logistic regression achieved 0.9532 accuracy, 0.9534
+precision, 0.9549 recall, and 0.9541 F1. The fixed rate/read-ratio rule baseline
+achieved 0.9218 accuracy and 0.9201 F1 on the same held-out segment. The
+evaluation report is saved in `ai_service/artifacts/evaluation.json` and is
+reproducible with the command above.

@@ -14,6 +14,7 @@ add_executable(cache_tests
     test_cache_engine.cpp
     test_protocol.cpp
     test_cluster.cpp
+    test_metrics.cpp
 )
 
 target_link_libraries(cache_tests PRIVATE cache_core GTest::gtest_main)

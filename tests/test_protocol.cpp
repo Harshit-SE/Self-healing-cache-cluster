@@ -102,3 +102,52 @@ TEST(ProtocolTest, ServerHandlesRealTcpRoundTrip) {
     EXPECT_EQ(response, "OK STORED\nOK VALUE hello world\nOK DELETED\nOK NOT_FOUND\nOK STORED\nOK VALUE \nERR expected key, ttl-ms (or -), and value\n");
     ::close(fd); server.stop(); server_thread.join();
 }
+
+TEST(ProtocolTest, MetricsHttpEndpointExportsMetricsAndHotKeyFeed) {
+    TcpServer server(0, 64 * 1024, static_cast<std::uint16_t>(0));
+    std::thread server_thread([&] { server.start(); });
+    const auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds(2);
+    while ((server.boundPort() == 0 || server.boundMetricsPort() == 0) &&
+           std::chrono::steady_clock::now() < deadline) std::this_thread::yield();
+
+    auto exchange = [](std::uint16_t port, const std::string& payload, bool read_to_close) {
+        int fd = ::socket(AF_INET, SOCK_STREAM, 0);
+        if (fd < 0) return std::string{};
+        sockaddr_in address{};
+        address.sin_family = AF_INET;
+        address.sin_addr.s_addr = htonl(INADDR_LOOPBACK);
+        address.sin_port = htons(port);
+        if (::connect(fd, reinterpret_cast<sockaddr*>(&address), sizeof(address)) != 0) {
+            ::close(fd); return std::string{};
+        }
+        if (::send(fd, payload.data(), payload.size(), MSG_NOSIGNAL) < 0) { ::close(fd); return std::string{}; }
+        std::string response;
+        char buffer[4096];
+        while (response.size() < 256 * 1024) {
+            const auto n = ::recv(fd, buffer, sizeof(buffer), 0);
+            if (n <= 0) break;
+            response.append(buffer, static_cast<std::size_t>(n));
+            if (!read_to_close && response.find('\n') != std::string::npos) break;
+        }
+        ::close(fd);
+        return response;
+    };
+
+    const auto write = exchange(server.boundPort(), "v1 SET metrics-hot-key - value\n", false);
+    const auto hit = exchange(server.boundPort(), "v1 GET metrics-hot-key\n", false);
+    const auto miss = exchange(server.boundPort(), "v1 GET absent-key\n", false);
+    const auto metrics = exchange(server.boundMetricsPort(), "GET /metrics HTTP/1.1\r\nHost: localhost\r\n\r\n", true);
+    const auto hotkeys = exchange(server.boundMetricsPort(), "GET /hotkeys HTTP/1.1\r\nHost: localhost\r\n\r\n", true);
+    server.stop();
+    server_thread.join();
+
+    EXPECT_NE(write.find("OK STORED"), std::string::npos);
+    EXPECT_NE(hit.find("OK VALUE value"), std::string::npos);
+    EXPECT_NE(miss.find("OK NOT_FOUND"), std::string::npos);
+    EXPECT_NE(metrics.find("HTTP/1.1 200 OK"), std::string::npos);
+    EXPECT_NE(metrics.find("cache_hits_total"), std::string::npos);
+    EXPECT_NE(metrics.find("cache_request_duration_seconds_bucket"), std::string::npos);
+    EXPECT_NE(metrics.find("cache_keys"), std::string::npos);
+    EXPECT_NE(hotkeys.find("HTTP/1.1 200 OK"), std::string::npos);
+    EXPECT_NE(hotkeys.find("metrics-hot-key"), std::string::npos);
+}

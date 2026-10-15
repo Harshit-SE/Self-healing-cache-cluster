@@ -58,6 +58,8 @@ public:
     // expiration, this MAY include expired-but-not-yet-accessed entries —
     // it is a storage count, not a "logically valid keys" count.
     std::size_t size() const;
+    // Approximate payload size: sum of key and value string lengths.
+    std::size_t approximateMemoryBytes() const;
 
     // Copies live entries with their remaining TTL for background migration.
     std::vector<SnapshotEntry> snapshot();

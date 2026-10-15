@@ -64,6 +64,13 @@ TEST(CacheEngineTest, SizeReflectsInsertsAndRemoves) {
     EXPECT_EQ(cache.size(), 1u);
 }
 
+TEST(CacheEngineTest, ApproximateMemoryBytesCountsKeyAndValueStrings) {
+    CacheEngine cache;
+    cache.set("abc", "12345");
+    cache.set("xy", "z");
+    EXPECT_EQ(cache.approximateMemoryBytes(), 11u);
+}
+
 TEST(CacheEngineTest, SnapshotReturnsLiveEntriesWithRemainingTtl) {
     CacheEngine cache;
     cache.set("persistent", "value");

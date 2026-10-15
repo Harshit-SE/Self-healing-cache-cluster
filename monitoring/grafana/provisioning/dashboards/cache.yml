@@ -1,0 +1,11 @@
+apiVersion: 1
+
+providers:
+  - name: Cache Cluster
+    orgId: 1
+    folder: Cache Cluster
+    type: file
+    disableDeletion: false
+    editable: true
+    options:
+      path: /var/lib/grafana/dashboards

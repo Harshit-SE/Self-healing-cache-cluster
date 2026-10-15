@@ -1,0 +1,24 @@
+{
+  "dataset": "Seeded synthetic cache trace; labels describe next-window hot state.",
+  "split": "first 80% of ordered time windows for training; final 20% held out",
+  "rows": {
+    "total": 11960,
+    "train": 9568,
+    "held_out": 2392
+  },
+  "hot_fraction_held_out": 0.51,
+  "probability_threshold": 0.42,
+  "logistic_regression": {
+    "accuracy": 0.9532,
+    "precision": 0.9534,
+    "recall": 0.9549,
+    "f1": 0.9541
+  },
+  "rule_baseline": {
+    "accuracy": 0.9218,
+    "precision": 0.9616,
+    "recall": 0.882,
+    "f1": 0.9201
+  },
+  "limitations": "Synthetic workload only; results do not estimate production accuracy."
+}

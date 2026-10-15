@@ -64,6 +64,13 @@ std::size_t CacheEngine::size() const {
     return store_.size();
 }
 
+std::size_t CacheEngine::approximateMemoryBytes() const {
+    std::shared_lock lock(mutex_);
+    std::size_t bytes = 0;
+    for (const auto& [key, entry] : store_) bytes += key.size() + entry.value.size();
+    return bytes;
+}
+
 std::vector<CacheEngine::SnapshotEntry> CacheEngine::snapshot() {
     std::vector<SnapshotEntry> entries;
     const auto now = std::chrono::steady_clock::now();
